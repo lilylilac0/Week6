@@ -47,12 +47,19 @@ my_heap_t my_heap;
 // Helper functions (feel free to add/remove/edit!)
 //
 
+void my_add_to_free_list(my_metadata_t*, int);
+void my_remove_from_free_list(my_metadata_t*, my_metadata_t*, int);
+int get_bin_index(size_t);
+void merge_free_blocks(int);
+
+// Add a free slot to the beginning of the free list.
 void my_add_to_free_list(my_metadata_t *metadata, int bin){
   assert(!metadata->next);
   metadata->next = my_heap.free_head[bin];
   my_heap.free_head[bin] = metadata;
 }
 
+// Remove a free slot from the free list.
 void my_remove_from_free_list(my_metadata_t *metadata, my_metadata_t *prev, int bin){
   if (prev){
     prev->next = metadata->next;
@@ -63,13 +70,27 @@ void my_remove_from_free_list(my_metadata_t *metadata, my_metadata_t *prev, int 
   metadata->next = NULL;
 }
 
+//sizeからどのbinに格納するか計算し、binのindexを返す。
 int get_bin_index(size_t size){
   for (int i = 0; i <= N - 1; i++){
-    if ((pow(2, 3 * i) <= size) && (size < pow(2, 3 * (i + 1)))){
+    size_t bin_size[N+1] = {0, 64, 256, 1024, 4096};
+    if((bin_size[i] <= size) && (size < bin_size[i + 1])){
       return i;
     }
   }
-  return -1;
+  return N-1;
+}
+
+//右側が空き領域であれば結合
+//受け取ったbinのリスト全要素に対して行う
+//my_free()の中で使う
+void merge_free_blocks(int bin){
+  my_metadata_t *current = my_heap.free_head[bin]; //ここで引数のmetadataはこの時点でfree_list[bin]の先頭
+  my_metadata_t *next_metadata = (my_metadata_t*)((char*)current + sizeof(my_metadata_t) + current->size);
+    if (next_metadata == current->next){
+      current->size += sizeof(my_metadata_t) + next_metadata->size;
+      current->next = next_metadata->next;
+    }
 }
 
 //
@@ -97,15 +118,25 @@ void *my_malloc(size_t size){
   my_metadata_t *best_prev = NULL;
 
   // Best-fit
-  while (metadata){
-    if (metadata->size >= size &&
-        (best_metadata == NULL || metadata->size < best_metadata->size)){
-      best_prev = prev;
-      best_metadata = metadata;
-    }
-    prev = metadata;
-    metadata = metadata->next;
+  while(1){
+    while (metadata){
+      if (metadata->size >= size &&
+          (best_metadata == NULL || metadata->size < best_metadata->size)){
+        best_prev = prev;
+        best_metadata = metadata;
+      }
+      prev = metadata;
+      metadata = metadata->next;
+   }
+
+   if(!best_metadata && bin < N-1){//現在のbinに空きがなければもう一つ大きいbinへgo!
+      bin++;
+      metadata = my_heap.free_head[bin];
+      prev = NULL;
+   }
+   else break;
   }
+  
 
   metadata = best_metadata;
   prev = best_prev;
@@ -113,7 +144,6 @@ void *my_malloc(size_t size){
   // now, metadata points to the first free slot
   // and prev is the previous entry.
 
-  // ここでnullなら他のbinが開いているか確認して、今満タンのbinにもう少し容量をもらうようにすす
   if (!metadata){
 
     // There was no free slot available. We need to request a new memory region
@@ -125,6 +155,7 @@ void *my_malloc(size_t size){
     //     <---------------------->
     //            buffer_size
     size_t buffer_size = 4096;
+    //fprintf(stderr, "Doing mmap for bin [%d]\n", bin);
     my_metadata_t *metadata = (my_metadata_t *)mmap_from_system(buffer_size);
     metadata->size = buffer_size - sizeof(my_metadata_t);
     metadata->next = NULL;
@@ -179,15 +210,39 @@ void my_free(void *ptr){
   int bin = get_bin_index(metadata->size);
   // Add the free slot to the free list.
   my_add_to_free_list(metadata, bin);
+  merge_free_blocks(bin);
+}
+
+void print_free_list_sizes() {
+  printf("Free list sizes:\n");
+  for (int i = 0; i < N; i++) {
+    int count = 0;
+    my_metadata_t *current = my_heap.free_head[i];
+    while (current != &my_heap.dummy && current != NULL) {
+      count++;
+      current = current->next;
+    }
+    printf("Bin %d: %d elements\n", i, count);
+  }
+  printf("\n");
 }
 
 // This is called at the end of each challenge.
 void my_finalize(){
   // Nothing is here for now.
   // feel free to add something if you want!
+  print_free_list_sizes();
 }
 
 void test(){
   // Implement here!
   assert(1 == 1); /* 1 is 1. That's always true! (You can remove this.) */
+  char *a = malloc(16);
+  char *b = malloc(16);
+  //assert((char*)a + 16 + sizeof(my_metadata_t) == (char*)b);
+  free(b);
+  free(a);
+  //print_free_list(); // free_listをprintする関数を別で作っておく
+  print_free_list_sizes();
 }
+
